@@ -360,9 +360,11 @@ def serve(conn, inp=None, out=None) -> None:
                     text = fn(conn, params.get("arguments") or {})
                 result = {"content": [{"type": "text", "text": text}], "isError": False}
                 try:
-                    result["structuredContent"] = json.loads(text)
+                    parsed = json.loads(text)
                 except ValueError:
-                    pass                       # non-JSON text (shouldn't happen) — text content only
+                    parsed = None             # non-JSON text (shouldn't happen) — text content only
+                if isinstance(parsed, dict): # spec: structuredContent must be an object
+                    result["structuredContent"] = parsed
                 _ok(rid, result)
             except Exception as e:         # tool errors are reported in-band, never crash the server
                 _ok(rid, {"content": [{"type": "text", "text": f"error: {e}"}], "isError": True})

@@ -96,6 +96,8 @@ def test_tool_results_include_structured_content_matching_text(tmp_path):
             "arguments": {"query": "structured", "project": "/proj"}}},
         {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {
             "name": "engrim_context", "arguments": {"project": "/proj"}}},
+        {"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {
+            "name": "engrim_review", "arguments": {"project": "/proj"}}},
     ])
     for frame in resp:
         result = frame["result"]
@@ -114,6 +116,7 @@ def test_unknown_tool_and_bad_args_are_in_band_errors(tmp_path):
     assert resp[0]["error"]["code"] == -32602                # unknown tool -> JSON-RPC error
     assert resp[1]["result"]["isError"] is True              # bad tool args -> in-band tool error
     assert "type must be one of" in resp[1]["result"]["content"][0]["text"]
+    assert "structuredContent" not in resp[1]["result"]      # in-band errors carry no structured payload
 
 
 def _review(conn, project="/p"):
