@@ -263,19 +263,26 @@ const packOk = typeof sys1.systemPromptOptions.sections.engrim === "string"
   && sys1.systemPromptOptions.sections.engrim.includes("engrim_recall")
 fs.unlinkSync(dir + "last-boot.json")
 const sys2 = { prompt: "do y", systemPrompt: "BASE", systemPromptOptions: { sections: {} } }
-await handlers.before_agent_start(sys2, ctx)
+const res2 = await handlers.before_agent_start(sys2, ctx)
 const cachedBoot = !fs.existsSync(dir + "last-boot.json")           // second call served from cache: no spawn
+const stableSection = sys2.systemPromptOptions.sections.engrim === sys1.systemPromptOptions.sections.engrim
+const sliceNotInSection = !sys2.systemPromptOptions.sections.engrim.includes("SLICE")
+const sliceMessage = res2 && res2.message
+  && res2.message.customType === "engrim_minder"
+  && res2.message.content === "SLICE"
+  && res2.message.display === false
 await handlers.session_compact({}, ctx)
 const sys3 = { prompt: "do z", systemPrompt: "BASE", systemPromptOptions: { sections: {} } }
 await handlers.before_agent_start(sys3, ctx)
 const rebootAfterCompact = fs.existsSync(dir + "last-boot.json")    // compaction invalidates the cache: re-spawned
-console.log(JSON.stringify({ first, second, toolLine, third, packOk, cachedBoot, rebootAfterCompact }))
+console.log(JSON.stringify({ first, second, toolLine, third, packOk, cachedBoot, stableSection, sliceNotInSection, sliceMessage, rebootAfterCompact }))
 """
 
 _FAKE_ENGRIM = """#!/bin/sh
 ev="$5"; cat > "$(dirname "$0")/last-$ev.json"
 if [ "$ev" = stop ] && [ -e "$(dirname "$0")/FAIL_STOP" ]; then exit 1; fi
 [ "$ev" = boot ] && echo PACK
+[ "$ev" = prompt ] && echo SLICE
 [ "$ev" = stop ] && echo '{"logged":1,"ok":true}'
 exit 0
 """
@@ -289,7 +296,8 @@ exit 0
 def test_extension_flush_skips_aborted_and_retries_failed_ingest(tmp_path):
     """Drive the real extension under node with a fake engrim: aborted assistant turns are never
     sent, a failed stop-ingest leaves the turns pending for the next flush, and a successful one
-    retires them; the boot pack is cached per session and rebuilt after compaction."""
+    retires them; the boot pack is cached per session, stable across prompts (prefix-cache safe),
+    the per-prompt slice rides a hidden custom message, and the pack is rebuilt after compaction."""
     fake = tmp_path / "fake-engrim.sh"
     fake.write_text(_FAKE_ENGRIM, encoding="utf-8")
     fake.chmod(0o755)
@@ -299,4 +307,5 @@ def test_extension_flush_skips_aborted_and_retries_failed_ingest(tmp_path):
     assert r.returncode == 0, r.stderr
     assert json.loads(r.stdout.strip().splitlines()[-1]) == {
         "first": ["u1", "a1"], "second": ["u1", "a1"], "toolLine": "hi\n[tool] bash",
-        "third": False, "packOk": True, "cachedBoot": True, "rebootAfterCompact": True}
+        "third": False, "packOk": True, "cachedBoot": True, "stableSection": True,
+        "sliceNotInSection": True, "sliceMessage": True, "rebootAfterCompact": True}

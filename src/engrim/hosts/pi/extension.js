@@ -116,11 +116,15 @@ export default function engrimExtension(pi) {
       minder.delete(id)
     }
     const p = await pack(id, ctx)
-    if (!p && !slice) return
-    // A named section keeps the boot pack self-delimiting and lets Pi diff it against the previous
-    // run instead of checkpointing the whole prompt (prompt-cache friendly).
-    event.systemPromptOptions.sections.engrim =
-      (p ? p + "\n\n" + USAGE : "") + (slice ? (p ? "\n\n" : "") + slice : "")
+    // The boot pack is stable per session, so it rides a named system-prompt section: pi diffs
+    // sections against the previous run, so a stable section costs no cache invalidation after the
+    // first insert. Never put per-prompt content here — any section change busts the provider's
+    // prefix cache for the whole session.
+    if (p) event.systemPromptOptions.sections.engrim = p + "\n\n" + USAGE
+    // The minder slice changes per prompt, so it rides a hidden custom message appended after the
+    // user prompt instead — a suffix the cached prefix doesn't cover.
+    if (!slice) return
+    return { message: { customType: "engrim_minder", content: slice, display: false } }
   })
 
   // The agent loop just ended: ingest the new turns into the flight-recorder log.
