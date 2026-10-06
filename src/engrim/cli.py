@@ -45,7 +45,7 @@ except ImportError:
 DEFAULT_DB = os.path.expanduser("~/.engrim/memory.db")
 TYPES = ("decision", "fact", "feedback", "state", "reference", "user")
 STATUSES = ("active", "superseded", "done")
-ORIGIN_AGENTS = ("antigravity", "claude-code", "cursor", "opencode", "cli", "user")
+ORIGIN_AGENTS = ("antigravity", "claude-code", "cursor", "opencode", "pi", "cli", "user")
 # priority for the session-boot pack: how-to-work-with-user first, then state, then the rest
 _PRIO = {"user": 0, "feedback": 1, "state": 2, "decision": 3, "fact": 4, "reference": 5}
 
@@ -62,6 +62,8 @@ def _norm_agent(agent: str | None) -> str | None:
         return "cursor"
     if a in ("opencode", "open-code", "open_code"):
         return "opencode"
+    if a in ("pi", "pi-coding-agent", "pi_coding_agent"):
+        return "pi"
     if a == "cli":
         return "cli"
     if a == "user":
@@ -77,6 +79,7 @@ def _agent_display(agent: str | None) -> str:
         "claude-code": "Claude Code",
         "cursor": "Cursor",
         "opencode": "OpenCode",
+        "pi": "Pi",
         "cli": "CLI",
         "user": "User",
     }
@@ -1130,10 +1133,13 @@ def cmd_hook(conn, a) -> None:
         else:
             sys.exit(f"Unknown event {event} for agent {agent}")
         return
-    if agent == "opencode":
-        from engrim.hosts.opencode.hooks import handle_boot, handle_prompt, handle_stop
+    if agent in ("opencode", "pi"):
+        # Both hosts speak the same boot/prompt/stop payload contract, so each one's hooks module
+        # exposes the same three handlers (the pi module re-exports the shared ones).
+        import importlib
+        hooks = importlib.import_module(f"engrim.hosts.{agent}.hooks")
         event = getattr(a, "event", None) or "boot"
-        fn = {"boot": handle_boot, "prompt": handle_prompt, "stop": handle_stop}.get(event)
+        fn = {"boot": hooks.handle_boot, "prompt": hooks.handle_prompt, "stop": hooks.handle_stop}.get(event)
         if fn is None:
             sys.exit(f"Unknown event {event} for agent {agent}")
         fn(db_path=getattr(a, "db", None))
@@ -1702,8 +1708,9 @@ def _setup_claude(conn, a, engrim_bin: str, dry_run: bool = False) -> None:
 
 
 def cmd_setup(conn, a) -> None:
-    """Universal multi-agent setup: Antigravity, Claude Code, Cursor, and Codex."""
+    """Universal multi-agent setup: Antigravity, Claude Code, Cursor, Codex, OpenCode, and Pi."""
     from engrim.hosts.opencode import wiring as opencode_host
+    from engrim.hosts.pi import wiring as pi_host
     engrim_bin = _hook_bin(shutil.which("engrim") or "engrim")
     dry_run = getattr(a, "dry_run", False)
     bin_error = _verify_hook_bin(engrim_bin)
@@ -1714,6 +1721,7 @@ def cmd_setup(conn, a) -> None:
         getattr(a, "cursor", False) or
         getattr(a, "codex", False) or
         getattr(a, "opencode", False) or
+        getattr(a, "pi", False) or
         getattr(a, "all", False) or
         getattr(a, "settings", None)
     )
@@ -1723,6 +1731,7 @@ def cmd_setup(conn, a) -> None:
     wire_cursor = getattr(a, "cursor", False) or getattr(a, "all", False)
     wire_codex = getattr(a, "codex", False) or getattr(a, "all", False)
     wire_opencode = getattr(a, "opencode", False) or getattr(a, "all", False)
+    wire_pi = getattr(a, "pi", False) or getattr(a, "all", False)
 
     if not explicit:
         gemini_dir = os.path.expanduser("~/.gemini")
@@ -1745,13 +1754,16 @@ def cmd_setup(conn, a) -> None:
         if os.path.isdir(opencode_host.config_dir()):
             wire_opencode = True
             detected.append(f"OpenCode ({opencode_host.config_dir(pretty=True)})")
+        if os.path.isdir(pi_host.agent_dir()):
+            wire_pi = True
+            detected.append(f"Pi ({pi_host.agent_dir(pretty=True)})")
 
         if detected:
             print(f"Auto-detected environments: {', '.join(detected)}")
         else:
             print("No specific environment directories detected (~/.gemini, ~/.claude, ~/.cursor, ~/.codex, "
-                  "~/.config/opencode).")
-            print("Defaulting to Claude Code setup. (Use --agy, --cursor, --codex, --opencode, or --all to wire others).")
+                  "~/.config/opencode, ~/.pi/agent).")
+            print("Defaulting to Claude Code setup. (Use --agy, --cursor, --codex, --opencode, --pi, or --all to wire others).")
             wire_claude = True
 
     if wire_agy:
@@ -1762,6 +1774,8 @@ def cmd_setup(conn, a) -> None:
         _setup_cursor(engrim_bin, dry_run=dry_run)
     if wire_opencode:
         opencode_host.setup(engrim_bin, dry_run=dry_run)
+    if wire_pi:
+        pi_host.setup(engrim_bin, dry_run=dry_run)
     if wire_codex:
         _setup_codex(engrim_bin, dry_run=dry_run)
 
@@ -1808,8 +1822,9 @@ def cmd_setup(conn, a) -> None:
 
 
 def cmd_uninstall(conn, a) -> None:
-    """Universal multi-agent uninstall: Antigravity, Claude Code, Cursor, and Codex."""
+    """Universal multi-agent uninstall: Antigravity, Claude Code, Cursor, Codex, OpenCode, and Pi."""
     from engrim.hosts.opencode import wiring as opencode_host
+    from engrim.hosts.pi import wiring as pi_host
     dry_run = getattr(a, "dry_run", False)
     explicit = bool(
         getattr(a, "agy", False) or
@@ -1817,6 +1832,7 @@ def cmd_uninstall(conn, a) -> None:
         getattr(a, "cursor", False) or
         getattr(a, "codex", False) or
         getattr(a, "opencode", False) or
+        getattr(a, "pi", False) or
         getattr(a, "all", False) or
         getattr(a, "settings", None)
     )
@@ -1826,6 +1842,7 @@ def cmd_uninstall(conn, a) -> None:
     wire_cursor = getattr(a, "cursor", False) or getattr(a, "all", False)
     wire_codex = getattr(a, "codex", False) or getattr(a, "all", False)
     wire_opencode = getattr(a, "opencode", False) or getattr(a, "all", False)
+    wire_pi = getattr(a, "pi", False) or getattr(a, "all", False)
 
     if not explicit:
         gemini_dir = os.path.expanduser("~/.gemini")
@@ -1848,13 +1865,16 @@ def cmd_uninstall(conn, a) -> None:
         if os.path.isdir(opencode_host.config_dir()):
             wire_opencode = True
             detected.append(f"OpenCode ({opencode_host.config_dir(pretty=True)})")
+        if os.path.isdir(pi_host.agent_dir()):
+            wire_pi = True
+            detected.append(f"Pi ({pi_host.agent_dir(pretty=True)})")
 
         if detected:
             print(f"Auto-detected environments: {', '.join(detected)}")
         else:
             print("No specific environment directories detected (~/.gemini, ~/.claude, ~/.cursor, ~/.codex, "
-                  "~/.config/opencode).")
-            print("Defaulting to Claude Code uninstall. (Use --agy, --cursor, --codex, --opencode, or --all to specify others).")
+                  "~/.config/opencode, ~/.pi/agent).")
+            print("Defaulting to Claude Code uninstall. (Use --agy, --cursor, --codex, --opencode, --pi, or --all to specify others).")
             wire_claude = True
 
     if wire_agy:
@@ -1865,6 +1885,8 @@ def cmd_uninstall(conn, a) -> None:
         _uninstall_cursor(dry_run=dry_run)
     if wire_opencode:
         opencode_host.uninstall(dry_run=dry_run)
+    if wire_pi:
+        pi_host.uninstall(dry_run=dry_run)
     if wire_codex:
         _uninstall_codex(dry_run=dry_run)
         
@@ -2055,6 +2077,7 @@ def cmd_doctor(conn, a) -> None:
     semantic embedding engine, and all supported AI coding agent environments."""
     import platform
     from engrim.hosts.opencode import wiring as opencode_host
+    from engrim.hosts.pi import wiring as pi_host
 
     as_json = getattr(a, "json", False)
     do_fix = getattr(a, "fix", False)
@@ -2273,7 +2296,22 @@ def cmd_doctor(conn, a) -> None:
                 pass
         report["environments"]["opencode"] = oc_env
 
-    # 3e. Codex CLI (~/.codex)
+    # 3e. Pi (<agent-dir>, default ~/.pi/agent)
+    if os.path.isdir(pi_host.agent_dir()):
+        pi_env = {"detected": True, "plugin": False, "mcp": False}
+        pi_ext = os.path.join(pi_host.agent_dir(), "extensions", "engrim.js")
+        pi_env["plugin"] = os.path.exists(pi_ext)
+        pi_mcp = os.path.join(pi_host.agent_dir(), "mcp.json")
+        if os.path.exists(pi_mcp):
+            try:
+                with open(pi_mcp, "r", encoding="utf-8") as f:
+                    pcfg = json.load(f)
+                pi_env["mcp"] = isinstance(pcfg, dict) and "engrim" in pcfg.get("mcpServers", {})
+            except Exception:
+                pass
+        report["environments"]["pi"] = pi_env
+
+    # 3f. Codex CLI (~/.codex)
     codex_dir = _codex_home()
     if os.path.isdir(codex_dir):
         codex_env = {"detected": True, "hooks": {}}
@@ -2318,6 +2356,9 @@ def cmd_doctor(conn, a) -> None:
         if "opencode" in report["environments"]:
             opencode_host.setup(engrim_bin, dry_run=False)
             report["fixes"].append("Repaired OpenCode plugin & MCP server configuration")
+        if "pi" in report["environments"]:
+            pi_host.setup(engrim_bin, dry_run=False)
+            report["fixes"].append("Repaired Pi extension & MCP server configuration")
 
     if as_json:
         print(json.dumps(report, indent=2))
@@ -2362,6 +2403,7 @@ def cmd_doctor(conn, a) -> None:
             "claude_code": "Claude Code (~/.claude)",
             "cursor": "Cursor (~/.cursor)",
             "opencode": f"OpenCode ({opencode_host.config_dir(pretty=True)})",
+            "pi": f"Pi ({pi_host.agent_dir(pretty=True)})",
             "codex": "Codex CLI (~/.codex)",
         }.get(env_name, env_name)
         print(f"  {title}:")
@@ -3827,11 +3869,11 @@ def build_parser() -> argparse.ArgumentParser:
     ph.add_argument("-b", "--budget", type=int, default=4000)
     ph.add_argument("--no-sync", action="store_true",
                     help="don't mirror Claude Code's file-memory before injecting")
-    ph.add_argument("--agent", choices=["claude", "agy", "antigravity", "codex", "opencode"], default="claude",
+    ph.add_argument("--agent", choices=["claude", "agy", "antigravity", "codex", "opencode", "pi"], default="claude",
                      help="Target agent environment (default: claude)")
     ph.add_argument("--event", choices=["boot", "stop", "sessionstart", "prompt"], default=None,
                     help="Hook lifecycle event (default: boot or sessionstart; "
-                         "opencode: boot | prompt | stop)")
+                         "opencode/pi: boot | prompt | stop)")
     ph.add_argument("--strict", "--gate", dest="strict", action="store_true",
                     help="gate mode: exit with code 2 if uncaptured decisions detected on stop")
     ph.set_defaults(func=cmd_hook)
@@ -3849,7 +3891,7 @@ def build_parser() -> argparse.ArgumentParser:
     prt.add_argument("--json", action="store_true")
     prt.set_defaults(func=cmd_retire)
 
-    pse = sub.add_parser("setup", help="wire engrim into agent environments (Antigravity, Claude, Cursor, Codex, OpenCode)")
+    pse = sub.add_parser("setup", help="wire engrim into agent environments (Antigravity, Claude, Cursor, Codex, OpenCode, Pi)")
     pse.add_argument("--agy", "--antigravity", dest="agy", action="store_true",
                      help="wire Antigravity hooks, deploy skill, and register MCP server")
     pse.add_argument("--claude", dest="claude", action="store_true",
@@ -3862,6 +3904,8 @@ def build_parser() -> argparse.ArgumentParser:
                      help="wire Codex CLI command hooks (MCP is optional and not required)")
     pse.add_argument("--opencode", dest="opencode", action="store_true",
                      help="write the OpenCode plugin, register the MCP server, and add AGENTS.md notes")
+    pse.add_argument("--pi", dest="pi", action="store_true",
+                     help="write the Pi extension, register the MCP server, and add AGENTS.md notes")
     pse.add_argument("--all", dest="all", action="store_true",
                      help="configure all detected agent environments")
     pse.add_argument("--dry-run", action="store_true",
@@ -3871,7 +3915,7 @@ def build_parser() -> argparse.ArgumentParser:
     pse.add_argument("--no-claude-md", action="store_true", help="don't touch ~/.claude/CLAUDE.md")
     pse.set_defaults(func=cmd_setup)
 
-    pun = sub.add_parser("uninstall", help="remove engrim from agent environments (Antigravity, Claude, Cursor, Codex, OpenCode)")
+    pun = sub.add_parser("uninstall", help="remove engrim from agent environments (Antigravity, Claude, Cursor, Codex, OpenCode, Pi)")
     pun.add_argument("--agy", "--antigravity", dest="agy", action="store_true",
                      help="remove Antigravity hooks, skill, and MCP server")
     pun.add_argument("--claude", dest="claude", action="store_true",
@@ -3882,6 +3926,8 @@ def build_parser() -> argparse.ArgumentParser:
                      help="remove Codex CLI hooks and MCP")
     pun.add_argument("--opencode", dest="opencode", action="store_true",
                      help="remove the OpenCode plugin, MCP entry, and AGENTS.md notes")
+    pun.add_argument("--pi", dest="pi", action="store_true",
+                     help="remove the Pi extension, MCP entry, and AGENTS.md notes")
     pun.add_argument("--all", dest="all", action="store_true",
                      help="remove from all detected agent environments")
     pun.add_argument("--dry-run", action="store_true",

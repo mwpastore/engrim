@@ -39,3 +39,4 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "engrim.hosts.opencode" = ["plugin.js", "AGENTS.md"]
+"engrim.hosts.pi" = ["extension.js", "AGENTS.md"]
